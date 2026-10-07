@@ -1,0 +1,45 @@
+# ---------- .NET ----------
+bin/
+obj/
+*.user
+*.suo
+TestResults/
+coverage/
+*.trx
+*.cobertura.xml
+artifacts/
+
+# ---------- Terraform ----------
+# Provider plugins and module caches are downloaded by "terraform init".
+**/.terraform/*
+# State files can contain secrets and must never be committed (remote state lives in S3).
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+# Saved plans can contain sensitive values.
+*.tfplan
+tfplan
+plan.txt
+# Local overrides are personal.
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# NOTE: .terraform.lock.hcl IS committed on purpose (see docs/terraform.md).
+
+# ---------- IDEs / OS ----------
+.vs/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---------- Misc ----------
+sbom*.json
+.env
+.env.*

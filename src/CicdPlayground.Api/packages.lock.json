@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net9.0": {
+      "Microsoft.AspNetCore.OpenApi": {
+        "type": "Direct",
+        "requested": "[9.0.20, )",
+        "resolved": "9.0.20",
+        "contentHash": "dJ+PafHe6aOIk+2qfi1w9w1GIYT1aDJIb8FKAtX6oEibQaPw+ASPHjBgiLH0rHEy5wYzrul6TW1qm2d8uuunMw==",
+        "dependencies": {
+          "Microsoft.OpenApi": "1.6.30"
+        }
+      },
+      "Microsoft.OpenApi": {
+        "type": "Transitive",
+        "resolved": "1.6.30",
+        "contentHash": "GIxOTS4vUCdIRDt+BcnJQKdaKb9b+L14IJnzkbHOXlm7JTbIyp37DpA2SdpxjdTB1RPQ1jhPwbdoNcUWznHsrg=="
+      }
+    }
+  }
+}

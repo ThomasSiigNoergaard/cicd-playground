@@ -1,0 +1,24 @@
+<Project>
+  <!--
+    Central Package Management (CPM): every NuGet version lives here, and the
+    .csproj files only reference packages by name. One place to upgrade, and
+    Dependabot understands this file natively.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Pin transitive dependencies to the versions below too, if they appear transitively. -->
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="Application">
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="9.0.20" />
+  </ItemGroup>
+
+  <ItemGroup Label="Testing">
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="9.0.20" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageVersion Include="xunit.v3" Version="4.0.1" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
+    <PackageVersion Include="coverlet.collector" Version="10.1.0" />
+  </ItemGroup>
+</Project>

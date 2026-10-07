@@ -1,0 +1,49 @@
+<Project>
+  <!--
+    Directory.Build.props is imported automatically by MSBuild into every project
+    below this folder. Putting shared settings here keeps each .csproj tiny and
+    guarantees that every project follows the same quality bar.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Nullable reference types turn many NullReferenceExceptions into compile-time warnings. -->
+    <Nullable>enable</Nullable>
+
+    <!-- Treat every warning as an error so problems cannot silently accumulate. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!--
+      Built-in .NET analyzers (CAxxxx rules). "latest-recommended" enables the
+      rules Microsoft recommends for most projects without being overly noisy.
+    -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+
+    <!-- Enforce .editorconfig code style (IDExxxx rules) during build, not only in the IDE. -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- XML docs are required by some analyzers (IDE0005) to detect unused usings at build time. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- CS1591: missing XML comment for publicly visible type. Too noisy for a demo API. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <!--
+      Deterministic builds produce byte-identical output for the same input,
+      which is a building block for reproducible builds and supply chain trust.
+      ContinuousIntegrationBuild normalises file paths when running in CI.
+    -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+
+    <!--
+      Lock files (packages.lock.json) record the exact resolved version and
+      content hash of every NuGet dependency, including transitive ones.
+      CI restores with locked mode so an unexpected change fails the build.
+    -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
+</Project>
