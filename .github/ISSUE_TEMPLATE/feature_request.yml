@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an improvement or a new thing to learn. Well-scoped requests can be assigned to the Copilot coding agent.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or goal
+      description: What do you want to achieve or learn?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Be specific (files, endpoints, workflows). Clear scope helps both humans and the Copilot coding agent.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] Endpoint returns ...
+        - [ ] Integration test added
+        - [ ] Docs updated
