@@ -1,0 +1,63 @@
+# -----------------------------------------------------------------------------
+# Reusable: create a tag and a GitHub release for an already-computed version.
+#
+# Called by release.yml. Kept separate so the only code with `contents: write`
+# is this small, dependency-free job (it uses the preinstalled gh CLI, so no
+# third-party action ever sees a write token).
+#
+# Note: tags and releases created with GITHUB_TOKEN do NOT trigger other
+# workflows (GitHub's loop protection). If you later want "on: release" to
+# fire, use a GitHub App token here instead.
+# -----------------------------------------------------------------------------
+name: Release (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to create, for example v1.2.0
+        type: string
+        required: true
+      changelog:
+        description: Markdown release notes
+        type: string
+        required: false
+        default: ""
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Create tag and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          # Passed through env, never interpolated into the script, so release
+          # notes cannot inject shell commands.
+          CHANGELOG: ${{ inputs.changelog }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Refusing to release non-SemVer tag '$TAG'"
+            exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists, nothing to do."
+            exit 0
+          fi
+          printf '%s\n' "$CHANGELOG" > notes.md
+          # --target creates the tag on the exact commit that was analysed.
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
+          {
+            echo "### Released [$TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG)"
+            echo
+            cat notes.md
+          } >> "$GITHUB_STEP_SUMMARY"
