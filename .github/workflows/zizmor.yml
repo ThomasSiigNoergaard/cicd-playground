@@ -1,0 +1,59 @@
+# zizmor: static security analysis of the workflows themselves.
+#
+# CodeQL's "actions" language covers some of this too, but zizmor is focused
+# on GitHub Actions and catches more: template injection, persisted
+# credentials, excessive permissions, unpinned or impostor actions, cache
+# poisoning, dangerous triggers and Dependabot cooldowns. Findings are uploaded
+# as SARIF, so they appear under Security > Code scanning (category "zizmor")
+# next to CodeQL and Trivy, and inline on PR diffs.
+#
+# Config and documented exceptions: .github/zizmor.yml
+# Run locally: uvx zizmor@1.30.1 --config .github/zizmor.yml .
+name: zizmor
+
+on:
+  pull_request:
+    paths:
+      - ".github/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/**"
+  schedule:
+    # New audits ship regularly, so rescan weekly even without changes.
+    - cron: "17 4 * * 2"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Upload SARIF to code scanning.
+      security-events: write
+      # Needed by the SARIF upload to read workflow run metadata.
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          # Pin the zizmor version (the action default is "latest") so a new
+          # release with new audits cannot turn the build red unexpectedly.
+          # Dependabot does not bump this; update it deliberately.
+          version: "1.30.1"
+          config: .github/zizmor.yml
+          # advanced-security (default true) uploads SARIF instead of failing
+          # the job; code scanning then gates PRs via its own check.

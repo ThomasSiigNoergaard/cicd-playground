@@ -1,0 +1,52 @@
+# -----------------------------------------------------------------------------
+# PR title lint: enforce Conventional Commits on pull request titles.
+#
+# Why the title and not every commit? With squash merging, the PR title becomes
+# the single commit subject on main, and release.yml derives the next version
+# from those subjects. Linting the title is enough and is friendlier than
+# rejecting work-in-progress commits on a branch.
+#
+# Uses `pull_request` (not `pull_request_target`): it only needs read access to
+# PR metadata, so there is no reason to run with the base repo's privileges.
+# -----------------------------------------------------------------------------
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Conventional PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+          # "feat: Add thing" is rejected; subjects start lower case.
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" in "{title}" must start with a lower case letter.

@@ -1,0 +1,18 @@
+# zizmor configuration: https://docs.zizmor.sh/configuration/
+#
+# zizmor is a static analyser for GitHub Actions workflows, composite actions
+# and dependabot.yml. It finds template injection, credential persistence,
+# over-broad permissions, unpinned actions, dangerous triggers and more.
+#
+# Keep this file small. Each exception must say WHY, so a reviewer can tell
+# whether it still applies. Prefer `rules.<id>.ignore` (specific files or
+# lines) over `disable: true` (the whole audit), because disabled audits do not
+# even show up in the "ignored" count.
+rules:
+  # GitHub added the self-repository syntax (`uses: $/path`) in July 2026. It is
+  # safer than `uses: ./path` because it cannot pick up an action that an
+  # earlier step wrote into the workspace. actionlint does not understand it
+  # yet, so adopting it would break the lint job. Revisit when actionlint adds
+  # support, then remove this block and switch every `./` reference.
+  self-repository:
+    disable: true
