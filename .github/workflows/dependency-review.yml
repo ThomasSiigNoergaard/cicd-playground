@@ -1,0 +1,39 @@
+# -----------------------------------------------------------------------------
+# Dependency review: blocks PRs that ADD dependencies with known
+# vulnerabilities (or disallowed licenses). It diffs the dependency graph of
+# the base and head commits, so it only judges what the PR changes.
+#
+# Requires the dependency graph to be enabled (it is by default on public
+# repos). Make this check "required" in a branch ruleset to enforce it.
+# -----------------------------------------------------------------------------
+name: Dependency review
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Needed to post the summary comment on the PR.
+      pull-requests: write
+    steps:
+      - name: Dependency review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          # Writes (and updates) a single summary comment on the PR. Use
+          # "on-failure" to only comment when something is wrong.
+          comment-summary-in-pr: always
+          # Also flag dependencies with a poor OpenSSF Scorecard score.
+          show-openssf-scorecard: true
+          warn-on-openssf-scorecard-level: 3

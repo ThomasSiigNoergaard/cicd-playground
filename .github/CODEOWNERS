@@ -1,0 +1,9 @@
+# Code owners are requested for review automatically on PRs touching their
+# paths. Combined with a branch ruleset that requires code owner review, this
+# becomes an enforced gate. The last matching pattern wins.
+*                       @ThomasSiigNoergaard
+
+# Explicit entries for sensitive paths, so ownership stays obvious if more
+# people are added later.
+/.github/workflows/     @ThomasSiigNoergaard
+/terraform/bootstrap/   @ThomasSiigNoergaard
