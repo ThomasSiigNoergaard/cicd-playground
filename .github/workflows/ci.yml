@@ -10,6 +10,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Merge queue: when a ruleset enables "Require merge queue", GitHub builds a
+  # temporary branch (main + queued PRs) and fires `merge_group`. Required
+  # checks must run on this event or the queue waits forever.
+  merge_group:
   workflow_dispatch:
 
 # Default to no permissions at all; every job opts in to exactly what it needs.
@@ -131,3 +135,36 @@ jobs:
           severity: CRITICAL
           exit-code: "1"
           skip-setup-trivy: true
+
+  # ---------------------------------------------------------------------------
+  # Aggregator: the ONE check a ruleset should require.
+  #
+  # Requiring every job by name is brittle: renaming a job or adding a matrix
+  # leg silently changes the required set. Instead, branch protection requires
+  # only "CI - Required Checks", and this job decides based on all its needs.
+  #
+  # `if: always()` is essential. Without it, a failed dependency makes this job
+  # "skipped", and GitHub treats a skipped required check as passing.
+  # ---------------------------------------------------------------------------
+  required-checks:
+    name: CI - Required Checks
+    if: ${{ always() }}
+    needs: [dotnet, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Evaluate job results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          # success and skipped are fine; failure and cancelled are not.
+          bad=$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
+          if [ -n "$bad" ]; then
+            echo "::error::Required jobs did not succeed: $bad"
+            exit 1
+          fi
+          echo "All required jobs passed." >> "$GITHUB_STEP_SUMMARY"
