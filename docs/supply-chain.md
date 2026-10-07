@@ -46,6 +46,25 @@ Every workflow starts with `permissions: {}` (no permissions at all). Each job t
 
 A compromised step can therefore do very little with the token. Scorecard's `Token-Permissions` check verifies this.
 
+## zizmor: static analysis for workflows
+
+[zizmor](https://docs.zizmor.sh) is a linter for the *security* of GitHub Actions workflows. actionlint checks whether a workflow is valid; zizmor checks whether it is safe. `zizmor.yml` runs it on every PR and push that touches `.github/`, and uploads the findings to code scanning. Typical findings:
+
+- **template-injection**: `${{ github.event.issue.title }}` (or any attacker-controllable value) pasted straight into a `run:` script, which lets a crafted title execute shell commands. The fix is to pass the value through `env:` and reference `"$VAR"`.
+- **excessive-permissions**: a workflow without a top-level `permissions:` block, or with broad write scopes.
+- **unpinned-uses**: actions referenced by tag instead of SHA.
+- **artipacked**: `actions/checkout` leaving the token in `.git/config` (`persist-credentials: false` fixes it).
+- **dangerous-triggers**: `pull_request_target` or `workflow_run` combined with checking out untrusted code.
+- **cache-poisoning**: release workflows that restore caches a PR could have written.
+
+Configuration lives in `.github/zizmor.yml`. One rule is disabled there: `self-repository` recommends the newer `uses: $/path` syntax over `uses: ./path`. The newer syntax is safer because it cannot pick up an action that an earlier step wrote into the workspace. actionlint does not understand it yet, though, so adopting it would break the lint job. The comment in the config says when to revisit this. The gh-aw generated `.lock.yml` files are scanned too; the gh-aw compiler hardens them.
+
+Run it locally with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uvx zizmor --offline --config .github/zizmor.yml .
+```
+
 ## Dependabot
 
 `.github/dependabot.yml` covers:
@@ -55,7 +74,7 @@ A compromised step can therefore do very little with the token. Scorecard's `Tok
 - **github-actions**, including the composite actions under `.github/actions/*`.
 - **terraform**, for each root and the shared module: `bootstrap`, `modules/app`, `environments/dev` and `environments/prod`.
 
-Updates are **grouped**, so you get one PR per ecosystem per week instead of twenty. Security updates (from **Dependabot alerts**) are separate, and arrive as soon as an advisory is published.
+Updates are **grouped**, so you get one PR per ecosystem per week instead of twenty. A 7-day **cooldown** delays version updates until a release has been public for a week, so a compromised release that is pulled quickly never reaches this repo. Security updates (from **Dependabot alerts**) are separate, ignore the cooldown, and arrive as soon as an advisory is published. Commit messages use the `build(deps)` prefix, which passes the PR title lint and does not cut a release.
 
 ## Dependency review
 

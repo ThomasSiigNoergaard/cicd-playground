@@ -94,6 +94,12 @@ Classic secret scanning matches **known token formats** from about 200 providers
 
 To test it safely, use a throwaway branch. Push protection should stop a fake but realistic-looking secret, such as a GitHub PAT format string. Generic detections are reported after the push. Delete the branch afterwards, and never use real credentials.
 
+## 5. GitHub Agentic Workflows
+
+Besides Copilot features you switch on in settings, this repo has three **agentic workflows** built with [gh-aw](https://github.com/github/gh-aw): issue triage, a CI doctor that explains failed runs, and a weekly status report. You write them in Markdown, and `gh aw compile` turns each one into a hardened `.lock.yml`. The agent runs read-only in a sandbox with a network firewall, and every write goes through a separate, allow-listed "safe outputs" job.
+
+They are off by default. Setup, the security model and how to edit them are in [agentic-workflows.md](agentic-workflows.md).
+
 ## Tips for working with Copilot here
 
 - Ask Copilot Chat to "explain this workflow" on any file in `.github/workflows`. The comments are written to make those explanations richer.

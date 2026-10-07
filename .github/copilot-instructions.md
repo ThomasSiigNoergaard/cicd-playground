@@ -26,6 +26,8 @@ dotnet test --configuration Release
 docker build -t cicd-playground:local .
 ./scripts/terraform-check.sh     # or scripts/terraform-check.ps1: fmt, validate, tflint for every stack
 actionlint                       # lint workflows
+uvx zizmor --offline --config .github/zizmor.yml .   # workflow security audit
+gh aw compile                    # after editing an agentic workflow (.github/workflows/*.md)
 ```
 
 ## Rules (non-negotiable)
@@ -42,5 +44,7 @@ actionlint                       # lint workflows
 - **AWS jobs must skip gracefully when AWS variables are unset.** Follow the existing `preflight` pattern, and write a notice to `$GITHUB_STEP_SUMMARY`.
 - **Do not interpolate untrusted input into `run:` scripts.** This includes `${{ github.event.* }}`. Pass values through `env:` instead.
 - **Promote images by digest, never rebuild per environment.**
-- Use conventional commits, for example `feat:`, `fix:`, `docs:`, `ci:`, `chore:` and `deps:`.
+- Use conventional commits, for example `feat:`, `fix:`, `docs:`, `ci:`, `chore:` and `build:`. PR titles must be conventional too, with a lower-case subject, because PRs are squash merged and the title drives the release version (`feat` = minor, `fix` = patch, `!` = major).
+- **Agentic workflows:** edit the `.github/workflows/*.md` source and run `gh aw compile`. Never hand-edit the generated `*.lock.yml` files, and never run `gh aw init`.
+- Workflow changes must pass both `actionlint` and `zizmor`.
 - Keep the README walkthrough and `docs/` in sync when behaviour changes.

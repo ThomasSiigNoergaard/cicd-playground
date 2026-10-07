@@ -21,12 +21,14 @@ Everything is commented where it teaches something. Start with the
 | --- | --- | --- |
 | App | .NET 9 minimal API, structured JSON logs, built-in OpenAPI, health checks, xUnit + WebApplicationFactory tests with coverlet coverage | - |
 | Container | Multi-stage build, digest-pinned `aspnet:9.0-noble-chiseled` runtime, non-root, port 8080 | [docs/supply-chain.md](docs/supply-chain.md) |
-| CI | Reusable .NET workflow, test report + coverage in the job summary, buildx with GHA cache, Trivy image scan to code scanning | - |
-| Security | CodeQL (C# + Actions), dependency review, Dependabot, Trivy IaC scan, OpenSSF Scorecard, build provenance + SBOM attestations | [docs/supply-chain.md](docs/supply-chain.md) |
+| CI | Reusable .NET workflow, test report + coverage in the job summary, buildx with GHA cache, Trivy image scan to code scanning, single `CI - Required Checks` aggregator, merge queue ready | [docs/releases.md](docs/releases.md) |
+| Releases | Conventional PR titles (linted) drive SemVer tags and GitHub releases via a reusable workflow | [docs/releases.md](docs/releases.md) |
+| Security | CodeQL (C# + Actions), zizmor workflow audit, dependency review, Dependabot with cooldown, Trivy IaC scan, OpenSSF Scorecard, build provenance + SBOM attestations | [docs/supply-chain.md](docs/supply-chain.md) |
 | AWS auth | GitHub OIDC with per-environment IAM roles, no long-lived keys | [docs/oidc.md](docs/oidc.md) |
 | Infra | Terraform bootstrap (S3 state with native locking, OIDC, roles), shared `app` module, `dev` and `prod` roots | [docs/terraform.md](docs/terraform.md) |
 | Delivery | Build once, deploy dev, smoke test, approve, promote the same digest to prod | - |
 | AI tooling | Copilot instructions, path-scoped instructions, coding agent setup steps, code review, Autofix | [docs/ai-tooling.md](docs/ai-tooling.md) |
+| Agentic workflows | gh-aw Markdown workflows: issue triage, CI doctor, weekly status (read-only agent, writes via safe-outputs) | [docs/agentic-workflows.md](docs/agentic-workflows.md) |
 
 ## Architecture
 
@@ -83,8 +85,10 @@ Dockerfile, .dockerignore       Multi-stage, chiseled, non-root image
 terraform/bootstrap/            Run once locally: state bucket, OIDC provider, IAM roles
 terraform/modules/app/          VPC, ALB, ECS, ECR, logs, IAM, security groups
 terraform/environments/dev|prod Thin root modules that call modules/app
-.github/workflows/              ci, _dotnet (reusable), codeql, dependency-review, scorecard,
-                                terraform, _terraform-apply (reusable), deploy, copilot-setup-steps
+.github/workflows/              ci, _dotnet (reusable), codeql, dependency-review, scorecard, zizmor,
+                                terraform, _terraform-apply (reusable), deploy, release, _release (reusable),
+                                pr-title, copilot-setup-steps, and gh-aw agentic workflows (*.md + *.lock.yml)
+.github/aw/                     gh-aw action pin lock (generated)
 .github/actions/                Composite actions: ecs-deploy, terraform-outputs
 .github/instructions/           Path-scoped Copilot instructions
 scripts/                        terraform-check.sh / .ps1 (fmt, validate, tflint for every stack)
@@ -184,10 +188,12 @@ gh api -X PUT repos/ThomasSiigNoergaard/cicd-playground/automated-security-fixes
 gh api -X PUT repos/ThomasSiigNoergaard/cicd-playground/private-vulnerability-reporting
 ```
 
-Optionally protect `main` with a ruleset (require a PR, and the status checks
-`.NET / Build and test`, `Docker build and scan`, `Dependency review`,
-`fmt / validate / tflint`). The exact check names appear in the picker after
-the first PR run.
+Protect `main` with a ruleset and switch to squash merges. Because PR titles
+become the squash commit and drive releases, and because CI ends in a single
+aggregator job, only two status checks need requiring: `CI - Required Checks`
+and `Conventional PR title`. The full `gh api` commands (repo merge settings
+and the ruleset JSON) are in [docs/releases.md](docs/releases.md). The check
+names appear in the ruleset picker after the first PR run.
 
 ### 3. Create the `dev` and `prod` GitHub environments
 
@@ -263,18 +269,25 @@ failing.
 Make a small change under `terraform/` (for example a tag value) and in
 `src/`, then open a PR. Watch:
 
-- **CI**: test report and coverage in the job summary, Trivy image scan
+- **CI**: test report and coverage in the job summary, Trivy image scan, and
+  the `CI - Required Checks` aggregator
 - **Terraform**: fmt/validate/tflint, Trivy IaC scan, and a plan for `dev`
   and `prod` posted as PR comments (updated in place on each push)
 - **CodeQL**, **Dependency review** (comment on the PR when dependencies change)
+- **PR title**: try a title like `Update stuff` and watch it fail, then rename
+  it to `feat: add greeting endpoint`
+- **zizmor** (when `.github/` changes): workflow security audit, findings in
+  **Security -> Code scanning**
 - **Copilot code review**, if you enabled it in step 9
 
 ### 7. Merge and watch the deployment
 
 On merge to `main`:
 
-1. **Terraform** applies `dev`, then waits for your approval on `prod`.
-2. **Deploy** builds the image once, pushes it to the dev ECR tagged with the
+1. **Release** tags a new version and creates a GitHub release if the squash
+   commit is a `feat:` or `fix:` (see [docs/releases.md](docs/releases.md)).
+2. **Terraform** applies `dev`, then waits for your approval on `prod`.
+3. **Deploy** builds the image once, pushes it to the dev ECR tagged with the
    git SHA, attests provenance and SBOM, deploys to dev, waits for service
    stability and smoke tests `/health` via the ALB. It then waits for your
    approval on `prod`, copies the **same digest** to the prod ECR and deploys.
@@ -329,6 +342,17 @@ See [docs/ai-tooling.md](docs/ai-tooling.md) for step by step setup of:
   `.github/workflows/copilot-setup-steps.yml` and follows
   `.github/copilot-instructions.md` plus `.github/instructions/*.instructions.md`.
 - **Copilot secret scanning** (generic secret detection)
+- **GitHub Agentic Workflows**: issue triage, CI doctor and a weekly status
+  report written in Markdown. They are off until you add a token and flip a
+  variable:
+
+  ```bash
+  gh secret set COPILOT_GITHUB_TOKEN    # fine-grained PAT with "Copilot Requests"
+  gh variable set AGENTIC_WORKFLOWS_ENABLED --body true
+  ```
+
+  Then open an issue and watch it get labelled. Details and the security model
+  are in [docs/agentic-workflows.md](docs/agentic-workflows.md).
 
 ### 10. Teardown and costs
 
@@ -368,8 +392,12 @@ when they still contain images. Full notes in
 - Every third-party action is pinned to a full commit SHA with a `# vX.Y.Z`
   comment; Dependabot keeps them current.
 - Workflows start with `permissions: {}` and grant least privilege per job.
+  `zizmor` and `actionlint` audit every workflow change.
 - No long-lived cloud credentials anywhere. AWS access is OIDC only.
-- Conventional commits (`feat:`, `fix:`, `ci:`, `docs:`, `chore:`, `deps:`).
+- Conventional commits and PR titles (`feat:`, `fix:`, `ci:`, `docs:`,
+  `chore:`, `build:`). PRs are squash merged, so the PR title decides the
+  release: `feat` is minor, `fix` is patch, `!` is major. Dependabot uses
+  `build(deps):`, which does not release.
 
 ## License
 
