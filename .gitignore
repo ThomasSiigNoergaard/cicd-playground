@@ -28,7 +28,10 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
-# NOTE: .terraform.lock.hcl IS committed on purpose (see docs/terraform.md).
+# NOTE: .terraform.lock.hcl IS committed on purpose for root modules (see
+# docs/terraform.md). Reusable modules do not own provider versions, so their
+# lock files (created by local validation) are ignored.
+terraform/modules/**/.terraform.lock.hcl
 
 # ---------- IDEs / OS ----------
 .vs/

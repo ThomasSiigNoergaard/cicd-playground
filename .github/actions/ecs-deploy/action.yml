@@ -1,0 +1,89 @@
+# Local composite action: roll a new image out to an ECS service and smoke test it.
+#
+# Terraform creates the first task definition revision. From then on this action
+# owns the image: it takes the latest registered revision (so CPU, memory, env
+# vars and roles stay whatever Terraform last set), swaps only the image, and
+# registers a new revision. The ECS service resource in Terraform ignores
+# task_definition changes, so the two tools do not fight each other.
+name: ECS deploy
+description: Render a new task definition revision with an image, deploy it, and smoke test /health.
+
+inputs:
+  task-family:
+    description: ECS task definition family.
+    required: true
+  container-name:
+    description: Container to update inside the task definition.
+    required: true
+  image:
+    description: Full image reference, preferably pinned by digest (repo@sha256:...).
+    required: true
+  cluster:
+    description: ECS cluster name.
+    required: true
+  service:
+    description: ECS service name.
+    required: true
+  base-url:
+    description: Public base URL used for the smoke test.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # describe-task-definition returns read-only fields (ARN, revision, status,
+    # timestamps...) that RegisterTaskDefinition rejects, so we strip them.
+    - name: Download current task definition
+      shell: bash
+      env:
+        FAMILY: ${{ inputs.task-family }}
+      run: |
+        set -euo pipefail
+        aws ecs describe-task-definition --task-definition "$FAMILY" --query taskDefinition \
+          | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                    .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' \
+          > "$RUNNER_TEMP/task-definition.json"
+
+    - name: Render task definition with new image
+      id: render
+      uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
+      with:
+        task-definition: ${{ runner.temp }}/task-definition.json
+        container-name: ${{ inputs.container-name }}
+        image: ${{ inputs.image }}
+
+    # wait-for-service-stability blocks until the new tasks pass ALB health
+    # checks and old tasks drain. The ECS deployment circuit breaker (enabled
+    # in the module with rollback = true) rolls back automatically if the new
+    # revision never becomes healthy, and this step then fails.
+    - name: Deploy task definition
+      uses: aws-actions/amazon-ecs-deploy-task-definition@c465972ecbd160473f22e683363b422a5412a3de # v2.6.3
+      with:
+        task-definition: ${{ steps.render.outputs.task-definition }}
+        cluster: ${{ inputs.cluster }}
+        service: ${{ inputs.service }}
+        # The service is created with 0 tasks (no image exists at that point).
+        # The first deployment scales it to 1.
+        desired-count: 1
+        wait-for-service-stability: true
+        wait-for-minutes: 15
+
+    # Belt and braces: ECS says it is stable, but is it reachable from the
+    # internet through the ALB? Retry briefly to ride out target registration.
+    - name: Smoke test
+      shell: bash
+      env:
+        BASE_URL: ${{ inputs.base-url }}
+      run: |
+        set -euo pipefail
+        for i in $(seq 1 20); do
+          if curl -fsS --max-time 5 "$BASE_URL/health"; then
+            echo
+            echo "Health check passed on attempt $i"
+            curl -fsS --max-time 5 "$BASE_URL/" | tee /dev/stderr | grep -q "$GITHUB_SHA"
+            exit 0
+          fi
+          sleep 6
+        done
+        echo "::error::$BASE_URL/health did not become healthy in time"
+        exit 1
