@@ -7,17 +7,17 @@
 #      of the attack surface (and most CVEs that scanners like Trivy would report).
 #
 # Base images are pinned by tag AND digest. The tag documents intent, the digest
-# makes the build reproducible. Dependabot (docker ecosystem) bumps both.
+# makes the build reproducible. Dependabot (docker ecosystem) bumps both. The
+# references are written directly in the FROM lines (not via ARG) because
+# Dependabot only parses literal FROM images.
 
-ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:9.0-noble@sha256:64c94a5a8fac55f965e0fb74b0e6a46b73b7323257c492170befbe5537dfafef
-ARG RUNTIME_IMAGE=mcr.microsoft.com/dotnet/aspnet:9.0-noble-chiseled@sha256:d096bdef27132e73dd09176abf68fdcec2c9751c33b02c2b0493fc41c3ef87fc
 
 # ---------------------------------------------------------------------------
 # Stage 1: build
 # ---------------------------------------------------------------------------
 # --platform=$BUILDPLATFORM runs the SDK natively on the build machine even when
 # cross-building for another architecture, which is much faster than emulation.
-FROM --platform=$BUILDPLATFORM ${SDK_IMAGE} AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0-noble@sha256:64c94a5a8fac55f965e0fb74b0e6a46b73b7323257c492170befbe5537dfafef AS build
 ARG TARGETARCH
 WORKDIR /source
 
@@ -39,7 +39,7 @@ RUN --mount=type=cache,id=nuget,target=/root/.nuget/packages \
 # ---------------------------------------------------------------------------
 # Stage 2: runtime
 # ---------------------------------------------------------------------------
-FROM ${RUNTIME_IMAGE} AS final
+FROM mcr.microsoft.com/dotnet/aspnet:9.0-noble-chiseled@sha256:d096bdef27132e73dd09176abf68fdcec2c9751c33b02c2b0493fc41c3ef87fc AS final
 
 # Build metadata surfaced by GET /. CI passes these as --build-arg.
 ARG APP_VERSION=local
