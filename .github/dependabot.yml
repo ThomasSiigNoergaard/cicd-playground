@@ -4,6 +4,15 @@
 #
 # Grouping keeps the PR count manageable: one PR per ecosystem per week
 # instead of one per package. CI, CodeQL and dependency review run on each PR.
+#
+# commit-message "build" + include: scope gives titles like
+# "build(deps): bump ..." that pass the PR title lint and do not trigger a
+# release (only feat/fix do).
+#
+# cooldown waits N days after a version is published before proposing it. Most
+# malicious package releases are detected and yanked within days, so this is a
+# cheap supply-chain defence (zizmor: dependabot-cooldown). Security updates
+# ignore the cooldown.
 # For GitHub Actions, Dependabot understands SHA pins and updates both the SHA
 # and the trailing "# vX.Y.Z" comment.
 version: 2
@@ -15,7 +24,10 @@ updates:
       interval: weekly
       day: monday
     commit-message:
-      prefix: "deps(nuget)"
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
     groups:
       nuget:
         patterns: ["*"]
@@ -26,7 +38,10 @@ updates:
       interval: weekly
       day: monday
     commit-message:
-      prefix: "deps(docker)"
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
     groups:
       docker:
         patterns: ["*"]
@@ -41,7 +56,10 @@ updates:
       interval: weekly
       day: monday
     commit-message:
-      prefix: "deps(actions)"
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]
@@ -57,7 +75,10 @@ updates:
       interval: weekly
       day: monday
     commit-message:
-      prefix: "deps(terraform)"
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
     groups:
       terraform:
         patterns: ["*"]

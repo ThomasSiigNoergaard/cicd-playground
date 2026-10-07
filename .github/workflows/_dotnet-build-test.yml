@@ -67,12 +67,19 @@ jobs:
       - name: Restore
         run: dotnet restore --locked-mode
 
+      # Inputs are passed through env vars instead of ${{ }} inside `run:`.
+      # Template expansion pastes text into the script before bash parses it,
+      # which is a code-injection vector (zizmor: template-injection).
       - name: Build
-        run: dotnet build --no-restore -c "${{ inputs.configuration }}"
+        env:
+          CONFIGURATION: ${{ inputs.configuration }}
+        run: dotnet build --no-restore -c "$CONFIGURATION"
 
       - name: Test with coverage
+        env:
+          CONFIGURATION: ${{ inputs.configuration }}
         run: >-
-          dotnet test --no-build -c "${{ inputs.configuration }}"
+          dotnet test --no-build -c "$CONFIGURATION"
           --collect:"XPlat Code Coverage"
           --results-directory TestResults
           --logger "trx;LogFileName=results.trx"

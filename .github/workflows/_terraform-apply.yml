@@ -47,16 +47,18 @@ jobs:
         working-directory: .
         env:
           AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          # Passed via env (not ${{ }} in the script) to avoid template injection.
+          ENVIRONMENT: ${{ inputs.environment }}
         run: |
           if [ -z "$AWS_DEPLOY_ROLE_ARN" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             {
-              echo "### :information_source: Apply skipped for \`${{ inputs.environment }}\`"
+              echo "### :information_source: Apply skipped for \`${ENVIRONMENT}\`"
               echo
-              echo "The \`${{ inputs.environment }}\` environment has no \`AWS_DEPLOY_ROLE_ARN\` variable yet."
+              echo "The \`${ENVIRONMENT}\` environment has no \`AWS_DEPLOY_ROLE_ARN\` variable yet."
               echo "See step 5 of the README walkthrough."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice title=AWS not configured::AWS_DEPLOY_ROLE_ARN missing on environment ${{ inputs.environment }}"
+            echo "::notice title=AWS not configured::AWS_DEPLOY_ROLE_ARN missing on environment ${ENVIRONMENT}"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
@@ -100,9 +102,11 @@ jobs:
 
       - name: Summary
         if: ${{ steps.check.outputs.configured == 'true' }}
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
         run: |
           {
-            echo "### Applied \`${{ inputs.environment }}\`"
+            echo "### Applied \`${ENVIRONMENT}\`"
             echo
             echo "| Output | Value |"
             echo "|---|---|"
