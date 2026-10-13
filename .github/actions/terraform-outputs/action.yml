@@ -1,0 +1,64 @@
+# Local composite action: read the outputs of one environment's Terraform state.
+#
+# Composite actions bundle steps that several jobs repeat. Unlike reusable
+# workflows (which are whole jobs), they run inside the caller's job and share
+# its filesystem and credentials. Here both deploy jobs need the same outputs.
+#
+# Requires: AWS credentials already configured and terraform on PATH (with the
+# setup-terraform wrapper disabled so `terraform output -raw` is clean).
+name: Terraform outputs
+description: Initialise an environment root against the remote state and expose its outputs.
+
+inputs:
+  environment:
+    description: Environment directory under terraform/environments (dev or prod).
+    required: true
+  state-bucket:
+    description: S3 bucket holding Terraform state (from terraform/bootstrap).
+    required: true
+  aws-region:
+    description: AWS region of the state bucket.
+    required: true
+
+outputs:
+  alb_url:
+    description: Public URL of the environment.
+    value: ${{ steps.read.outputs.alb_url }}
+  ecr_repository_url:
+    description: ECR repository URL.
+    value: ${{ steps.read.outputs.ecr_repository_url }}
+  cluster_name:
+    description: ECS cluster name.
+    value: ${{ steps.read.outputs.cluster_name }}
+  service_name:
+    description: ECS service name.
+    value: ${{ steps.read.outputs.service_name }}
+  task_family:
+    description: ECS task definition family.
+    value: ${{ steps.read.outputs.task_family }}
+  container_name:
+    description: Container name inside the task definition.
+    value: ${{ steps.read.outputs.container_name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read outputs
+      id: read
+      shell: bash
+      working-directory: terraform/environments/${{ inputs.environment }}
+      env:
+        BUCKET: ${{ inputs.state-bucket }}
+        REGION: ${{ inputs.aws-region }}
+      run: |
+        set -euo pipefail
+        terraform init -input=false -lockfile=readonly \
+          -backend-config="bucket=$BUCKET" -backend-config="region=$REGION" >/dev/null
+        for name in alb_url ecr_repository_url cluster_name service_name task_family container_name; do
+          value=$(terraform output -raw "$name")
+          if [ -z "$value" ]; then
+            echo "::error::Terraform output '$name' is empty. Has terraform.yml applied this environment yet?"
+            exit 1
+          fi
+          echo "$name=$value" >> "$GITHUB_OUTPUT"
+        done

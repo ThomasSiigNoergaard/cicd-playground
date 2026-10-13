@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Shared settings (target framework, nullable, analyzers) come from Directory.Build.props. -->
+  <PropertyGroup>
+    <RootNamespace>CicdPlayground.Api</RootNamespace>
+    <!-- Invariant globalization avoids needing ICU in the chiseled runtime image. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Version is defined centrally in Directory.Packages.props. -->
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Lets the test project access internal types if ever needed. -->
+    <InternalsVisibleTo Include="CicdPlayground.Api.Tests" />
+  </ItemGroup>
+</Project>

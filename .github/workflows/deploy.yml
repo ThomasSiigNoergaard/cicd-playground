@@ -1,0 +1,352 @@
+# Build once, deploy everywhere.
+#
+#   push to main -> build image -> push to dev ECR (tag = git SHA)
+#                -> attest provenance + SBOM (bound to the image digest)
+#                -> deploy to ECS dev, wait for stability, smoke test
+#                -> [manual approval on the `prod` environment]
+#                -> copy the SAME digest to prod ECR -> deploy prod -> smoke test
+#
+# Key ideas this workflow demonstrates:
+# - Promotion by digest: prod runs byte-for-byte what was tested in dev. We
+#   never rebuild for prod, and we reference images as repo@sha256:... so a tag
+#   can never be swapped underneath us (ECR tags are immutable as well).
+# - OIDC: no AWS keys. Each job assumes a role whose trust policy only accepts
+#   tokens from this repo AND the matching GitHub environment.
+# - Graceful skip: until bootstrap has run and variables are set, every AWS
+#   step is skipped with a notice so main stays green.
+# - Infra vs app: terraform.yml owns infrastructure. This workflow only reads
+#   terraform outputs and ships new task definition revisions.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions: {}
+
+# Never cancel an in-flight deployment; queue the next one instead. Cancelling
+# halfway through an ECS rollout leaves the service in a confusing state.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.13.4"
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check repository variables
+        id: check
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          if [ -n "$AWS_REGION" ] && [ -n "$TF_STATE_BUCKET" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "AWS variables found; deployment will run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Deployment skipped"
+              echo ""
+              echo "> [!NOTE]"
+              echo "> Repository variables \`AWS_REGION\` and/or \`TF_STATE_BUCKET\` are not set."
+              echo "> Run \`terraform/bootstrap\` and follow README step 5, then re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Deployment skipped::AWS variables are not configured yet (see README step 5)."
+          fi
+
+  deploy-dev:
+    name: Build and deploy (dev)
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The environment gives us: environment-scoped variables (the deploy role
+    # ARN), the OIDC sub claim `...:environment:dev`, and a deployment entry
+    # with a clickable URL in the GitHub UI.
+    environment:
+      name: dev
+      url: ${{ steps.tf.outputs.alb_url }}
+    permissions:
+      contents: read
+      id-token: write # request the OIDC token for AWS and for Sigstore signing
+      attestations: write # store attestations in the GitHub attestation API
+    outputs:
+      deployed: ${{ steps.check.outputs.configured }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Check environment variables
+        id: check
+        env:
+          ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          if [ -n "$ROLE" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "### dev deployment skipped: \`AWS_DEPLOY_ROLE_ARN\` is not set on the dev environment." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=dev skipped::Set AWS_DEPLOY_ROLE_ARN on the dev environment (README step 5)."
+          fi
+
+      - name: Checkout
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-deploy-dev-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Set up Terraform
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Read infrastructure outputs
+        id: tf
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: ./.github/actions/terraform-outputs
+        with:
+          environment: dev
+          state-bucket: ${{ vars.TF_STATE_BUCKET }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Set up Docker Buildx
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build and push image
+        id: build
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          # ECS tasks are X86_64 (see the module). Build exactly that.
+          platforms: linux/amd64
+          tags: ${{ steps.tf.outputs.ecr_repository_url }}:${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ github.run_number }}
+            GIT_COMMIT_SHA=${{ github.sha }}
+          # BuildKit's own provenance/SBOM would wrap the image in an OCI index.
+          # We use GitHub artifact attestations instead (signed with Sigstore
+          # and verifiable with `gh attestation verify`), and keep the pushed
+          # artifact a plain single-platform manifest so the digest is simple
+          # to reason about when promoting to prod.
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # SLSA build provenance: a signed statement "this digest was built by
+      # this workflow, from this commit". push-to-registry also stores the
+      # attestation next to the image in ECR as an OCI referrer.
+      - name: Attest build provenance
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.tf.outputs.ecr_repository_url }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      # The SBOM lists every package in the image (OS + NuGet). Syft scans the
+      # pushed image so the SBOM matches the exact digest we attest.
+      - name: Generate SBOM
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ steps.tf.outputs.ecr_repository_url }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: true
+
+      - name: Attest SBOM
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ steps.tf.outputs.ecr_repository_url }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+
+      - name: Deploy to ECS
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: ./.github/actions/ecs-deploy
+        with:
+          task-family: ${{ steps.tf.outputs.task_family }}
+          container-name: ${{ steps.tf.outputs.container_name }}
+          image: ${{ steps.tf.outputs.ecr_repository_url }}@${{ steps.build.outputs.digest }}
+          cluster: ${{ steps.tf.outputs.cluster_name }}
+          service: ${{ steps.tf.outputs.service_name }}
+          base-url: ${{ steps.tf.outputs.alb_url }}
+
+      - name: Summary
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        env:
+          URL: ${{ steps.tf.outputs.alb_url }}
+          IMAGE: ${{ steps.tf.outputs.ecr_repository_url }}@${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### Deployed to dev"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| URL | $URL |"
+            echo "| Image | \`$IMAGE\` |"
+            echo ""
+            echo "Verify the attestations:"
+            echo '```bash'
+            echo "gh attestation verify oci://$IMAGE -R $GITHUB_REPOSITORY"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-prod:
+    name: Promote and deploy (prod)
+    needs: deploy-dev
+    # Only promote something that was actually deployed and smoke tested.
+    if: ${{ needs.deploy-dev.outputs.deployed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Required reviewers on the `prod` environment pause the job here until
+    # someone approves it in the GitHub UI.
+    environment:
+      name: prod
+      url: ${{ steps.tf.outputs.alb_url }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DIGEST: ${{ needs.deploy-dev.outputs.digest }}
+    steps:
+      - name: Check environment variables
+        id: check
+        env:
+          ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          if [ -n "$ROLE" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "### prod deployment skipped: \`AWS_DEPLOY_ROLE_ARN\` is not set on the prod environment." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=prod skipped::Set AWS_DEPLOY_ROLE_ARN on the prod environment (README step 5)."
+          fi
+
+      - name: Checkout
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-deploy-prod-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Set up Terraform
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Read infrastructure outputs
+        id: tf
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: ./.github/actions/terraform-outputs
+        with:
+          environment: prod
+          state-bucket: ${{ vars.TF_STATE_BUCKET }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Set up Docker Buildx
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Copy the manifest and layers registry-to-registry. Nothing is rebuilt,
+      # so the digest is identical. The dev repo URL is derived from the prod
+      # one because both live in the same account and region in this lab.
+      # (With one AWS account per environment you would instead grant the prod
+      # account pull access to the dev repo via an ECR repository policy.)
+      - name: Promote image by digest
+        id: promote
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        env:
+          PROD_REPO: ${{ steps.tf.outputs.ecr_repository_url }}
+        run: |
+          set -euo pipefail
+          DEV_REPO="${PROD_REPO%-prod}-dev"
+          echo "Copying $DEV_REPO@$DIGEST -> $PROD_REPO:$GITHUB_SHA"
+          if aws ecr describe-images --repository-name "${PROD_REPO#*/}" \
+               --image-ids imageDigest="$DIGEST" >/dev/null 2>&1; then
+            echo "Digest already present in prod repo (re-run); skipping copy."
+          else
+            docker buildx imagetools create --tag "$PROD_REPO:$GITHUB_SHA" "$DEV_REPO@$DIGEST"
+          fi
+          actual=$(aws ecr describe-images --repository-name "${PROD_REPO#*/}" \
+            --image-ids imageDigest="$DIGEST" --query 'imageDetails[0].imageDigest' --output text)
+          if [ "$actual" != "$DIGEST" ]; then
+            echo "::error::Digest mismatch after promotion: expected $DIGEST, got $actual"
+            exit 1
+          fi
+          echo "image=$PROD_REPO@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # No new attestation is created here on purpose: attestations are bound
+      # to the digest, not the repository name, so the provenance and SBOM made
+      # in the dev job already verify for the prod image:
+      #   gh attestation verify oci://<prod-repo>@<digest> -R <owner>/<repo>
+      # Re-attesting would falsely claim this job built the image.
+
+      - name: Deploy to ECS
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: ./.github/actions/ecs-deploy
+        with:
+          task-family: ${{ steps.tf.outputs.task_family }}
+          container-name: ${{ steps.tf.outputs.container_name }}
+          image: ${{ steps.promote.outputs.image }}
+          cluster: ${{ steps.tf.outputs.cluster_name }}
+          service: ${{ steps.tf.outputs.service_name }}
+          base-url: ${{ steps.tf.outputs.alb_url }}
+
+      - name: Summary
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        env:
+          URL: ${{ steps.tf.outputs.alb_url }}
+          IMAGE: ${{ steps.promote.outputs.image }}
+        run: |
+          {
+            echo "### Deployed to prod"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| URL | $URL |"
+            echo "| Image | \`$IMAGE\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

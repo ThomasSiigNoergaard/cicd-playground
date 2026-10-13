@@ -1,0 +1,15 @@
+# Normalise line endings in the repository to LF regardless of the
+# contributor's OS (core.autocrlf). Keeps diffs clean and avoids Terraform
+# lock files / shell scripts flapping between CRLF and LF.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF so they behave in older tooling.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary files - never touch.
+*.png binary
+*.jpg binary
+*.ico binary
+
+.github/workflows/*.lock.yml linguist-generated=true

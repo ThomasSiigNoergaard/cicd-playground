@@ -1,0 +1,170 @@
+# -----------------------------------------------------------------------------
+# CI: build/test the API and build + scan the container image.
+#
+# Runs on every pull request and on pushes to main. Nothing here touches AWS;
+# publishing images is the job of deploy.yml.
+# -----------------------------------------------------------------------------
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Merge queue: when a ruleset enables "Require merge queue", GitHub builds a
+  # temporary branch (main + queued PRs) and fires `merge_group`. Required
+  # checks must run on this event or the queue waits forever.
+  merge_group:
+  workflow_dispatch:
+
+# Default to no permissions at all; every job opts in to exactly what it needs.
+permissions: {}
+
+# One run per branch/PR. A new push cancels the superseded run, which saves
+# minutes. On main we do not cancel, so every commit gets a full CI result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  dotnet:
+    name: .NET
+    # Calling the reusable workflow. The caller must grant every permission
+    # the called workflow's jobs ask for.
+    uses: ./.github/workflows/_dotnet-build-test.yml
+    permissions:
+      contents: read
+      checks: write
+
+  docker:
+    name: Docker build and scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Upload Trivy SARIF to the code scanning (Security) tab.
+      security-events: write
+      # Required by upload-sarif on private repos to read workflow run info.
+      actions: read
+    env:
+      IMAGE: cicd-playground:ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Buildx (BuildKit) enables cache mounts, multi-platform builds and
+      # external cache backends such as the GitHub Actions cache below.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          # `load` puts the image into the local Docker engine so Trivy can
+          # scan it. Nothing is pushed from CI.
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}
+          build-args: |
+            APP_VERSION=ci-${{ github.run_number }}
+            GIT_COMMIT_SHA=${{ github.sha }}
+          # type=gha stores layers in the Actions cache. mode=max also caches
+          # intermediate stages (the SDK build stage), not only the final one.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name api -p 8080:8080 "$IMAGE"
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/health; then echo; break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/ | tee /dev/stderr | grep -q "${GITHUB_SHA}"
+          # The Dockerfile HEALTHCHECK should report healthy too.
+          for _ in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' api)
+            [ "$status" = "healthy" ] && break
+            sleep 2
+          done
+          echo "Container health: $status"
+          [ "$status" = "healthy" ]
+
+      - name: Container logs
+        if: ${{ always() }}
+        run: docker logs api || true
+
+      # Trivy scans OS packages and .NET dependencies in the image. SARIF is
+      # uploaded so findings show up as code scanning alerts (with Copilot
+      # Autofix suggestions where possible) instead of being buried in logs.
+      - name: Trivy image scan (SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}
+          format: sarif
+          output: trivy-image.sarif
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH,MEDIUM
+          # Without this, SARIF output ignores `severity` and includes all.
+          limit-severities-for-sarif: true
+          # Report only; the gate is the table step below.
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      # Gate: fail the build on fixable CRITICAL vulnerabilities. Keeping the
+      # SARIF upload and the gate separate means alerts are always recorded
+      # even when the gate fails. The second run reuses the cached DB.
+      - name: Trivy gate (fixable CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          ignore-unfixed: true
+          severity: CRITICAL
+          exit-code: "1"
+          skip-setup-trivy: true
+
+  # ---------------------------------------------------------------------------
+  # Aggregator: the ONE check a ruleset should require.
+  #
+  # Requiring every job by name is brittle: renaming a job or adding a matrix
+  # leg silently changes the required set. Instead, branch protection requires
+  # only "CI - Required Checks", and this job decides based on all its needs.
+  #
+  # `if: always()` is essential. Without it, a failed dependency makes this job
+  # "skipped", and GitHub treats a skipped required check as passing.
+  # ---------------------------------------------------------------------------
+  required-checks:
+    name: CI - Required Checks
+    if: ${{ always() }}
+    needs: [dotnet, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Evaluate job results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          # success and skipped are fine; failure and cancelled are not.
+          bad=$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
+          if [ -n "$bad" ]; then
+            echo "::error::Required jobs did not succeed: $bad"
+            exit 1
+          fi
+          echo "All required jobs passed." >> "$GITHUB_STEP_SUMMARY"

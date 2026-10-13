@@ -1,0 +1,116 @@
+# -----------------------------------------------------------------------------
+# Reusable workflow: terraform apply for ONE environment.
+#
+# Called by terraform.yml (dev, then prod). Running the job inside the GitHub
+# environment does three things:
+#   1. The OIDC token subject becomes `repo:<owner>/<repo>:environment:<env>`,
+#      so only the deploy role for that environment can be assumed.
+#   2. Environment protection rules apply (prod: required reviewer, main only).
+#   3. Environment variables (AWS_DEPLOY_ROLE_ARN) are resolved per env.
+# -----------------------------------------------------------------------------
+name: Terraform apply (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment and Terraform root name (dev or prod).
+        required: true
+        type: string
+      terraform-version:
+        description: Terraform CLI version.
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  apply:
+    name: terraform apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: terraform/environments/${{ inputs.environment }}
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+    steps:
+      - name: Check environment variables
+        id: check
+        working-directory: .
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          # Passed via env (not ${{ }} in the script) to avoid template injection.
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          if [ -z "$AWS_DEPLOY_ROLE_ARN" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### :information_source: Apply skipped for \`${ENVIRONMENT}\`"
+              echo
+              echo "The \`${ENVIRONMENT}\` environment has no \`AWS_DEPLOY_ROLE_ARN\` variable yet."
+              echo "See step 5 of the README walkthrough."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=AWS not configured::AWS_DEPLOY_ROLE_ARN missing on environment ${ENVIRONMENT}"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure AWS credentials (OIDC, deploy role)
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-apply-${{ inputs.environment }}-${{ github.run_id }}
+
+      - name: Setup Terraform
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}" -backend-config="region=${TF_VAR_aws_region}"
+
+      # Plan and apply the saved plan file so exactly what was printed is what
+      # gets applied (no drift between "plan" and "apply" inside this job).
+      - name: terraform plan
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        run: terraform plan -no-color -lock-timeout=5m -out=tfplan
+
+      - name: terraform apply
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        run: terraform apply -no-color -lock-timeout=5m tfplan
+
+      - name: Summary
+        if: ${{ steps.check.outputs.configured == 'true' }}
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          {
+            echo "### Applied \`${ENVIRONMENT}\`"
+            echo
+            echo "| Output | Value |"
+            echo "|---|---|"
+            echo "| ALB URL | $(terraform output -raw alb_url) |"
+            echo "| ECR repository | $(terraform output -raw ecr_repository_url) |"
+            echo "| ECS service | $(terraform output -raw cluster_name)/$(terraform output -raw service_name) |"
+          } >> "$GITHUB_STEP_SUMMARY"

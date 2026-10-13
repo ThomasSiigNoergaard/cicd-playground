@@ -1,0 +1,49 @@
+# EditorConfig keeps formatting consistent across editors and is enforced at
+# build time for C# (EnforceCodeStyleInBuild in Directory.Build.props).
+# https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml,tf,tfvars,hcl,props,csproj,xml,md}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
+
+[*.{cmd,bat,ps1}]
+end_of_line = crlf
+
+[*.cs]
+# Namespaces and usings
+csharp_style_namespace_declarations = file_scoped:warning
+dotnet_sort_system_directives_first = true
+csharp_using_directive_placement = outside_namespace:warning
+
+# Prefer modern, concise syntax
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_expression_bodied_lambdas = true:suggestion
+csharp_prefer_braces = true:warning
+dotnet_style_prefer_collection_expression = when_types_loosely_match:suggestion
+
+# Unused usings are errors at build time (IDE0005).
+dotnet_diagnostic.IDE0005.severity = warning
+
+# Private fields are _camelCase.
+dotnet_naming_rule.private_fields_underscore.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore.style = underscore_camel
+dotnet_naming_rule.private_fields_underscore.severity = warning
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_style.underscore_camel.capitalization = camel_case
+dotnet_naming_style.underscore_camel.required_prefix = _

@@ -1,0 +1,20 @@
+# Keep the Docker build context small and free of secrets. Everything not needed
+# to build the API image is excluded; the Dockerfile copies only what it needs.
+**/bin/
+**/obj/
+**/TestResults/
+**/.vs/
+**/.vscode/
+**/.idea/
+**/*.user
+.git/
+.github/
+docs/
+scripts/
+terraform/
+tests/
+*.md
+.env
+.env.*
+Dockerfile
+.dockerignore

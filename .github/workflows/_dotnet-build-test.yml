@@ -1,0 +1,123 @@
+# -----------------------------------------------------------------------------
+# Reusable workflow: restore, build and test the .NET solution.
+#
+# The leading underscore in the file name is only a convention that signals
+# "not triggered directly, called by other workflows". A workflow becomes
+# reusable through the `workflow_call` trigger below; callers reference it with
+#   uses: ./.github/workflows/_dotnet-build-test.yml
+#
+# Reusable workflows vs composite actions:
+#   - A reusable workflow contains whole JOBS (own runner, permissions,
+#     environment, services). Great for sharing a full pipeline stage.
+#   - A composite action contains STEPS that run inside the caller's job.
+# -----------------------------------------------------------------------------
+name: .NET build and test (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      configuration:
+        description: Build configuration.
+        type: string
+        default: Release
+    outputs:
+      coverage-line-rate:
+        description: Line coverage percentage reported by the test run.
+        value: ${{ jobs.build-test.outputs.coverage-line-rate }}
+
+# A called workflow can only narrow the permissions the caller granted, never
+# widen them. Declaring them here documents what this workflow needs.
+permissions: {}
+
+jobs:
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # dorny/test-reporter publishes the results as a check run.
+      checks: write
+    outputs:
+      coverage-line-rate: ${{ steps.coverage.outputs.line-rate }}
+    env:
+      # Skip the first-run experience and telemetry to keep logs clean.
+      DOTNET_NOLOGO: "true"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+      # Directory.Build.props turns on RestoreLockedMode when CI=true, so a
+      # restore that would change packages.lock.json fails the build instead
+      # of silently resolving different package versions.
+      CI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Do not leave the GITHUB_TOKEN in .git/config for later steps.
+          persist-credentials: false
+
+      - name: Setup .NET (version from global.json)
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+          # Built-in NuGet cache keyed on the packages.lock.json files.
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      # Inputs are passed through env vars instead of ${{ }} inside `run:`.
+      # Template expansion pastes text into the script before bash parses it,
+      # which is a code-injection vector (zizmor: template-injection).
+      - name: Build
+        env:
+          CONFIGURATION: ${{ inputs.configuration }}
+        run: dotnet build --no-restore -c "$CONFIGURATION"
+
+      - name: Test with coverage
+        env:
+          CONFIGURATION: ${{ inputs.configuration }}
+        run: >-
+          dotnet test --no-build -c "$CONFIGURATION"
+          --collect:"XPlat Code Coverage"
+          --results-directory TestResults
+          --logger "trx;LogFileName=results.trx"
+
+      # Runs even when tests fail so the failure details are visible.
+      - name: Publish test results
+        if: ${{ !cancelled() }}
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+        with:
+          name: Test results
+          path: "TestResults/**/*.trx"
+          reporter: dotnet-trx
+          fail-on-error: true
+
+      # ReportGenerator turns the Cobertura XML from coverlet into a Markdown
+      # summary. It is installed as a pinned global tool rather than a
+      # marketplace action to keep the third-party surface small.
+      - name: Coverage summary
+        id: coverage
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-reportgenerator-globaltool --version 5.5.11
+          reportgenerator \
+            -reports:"TestResults/**/coverage.cobertura.xml" \
+            -targetdir:CoverageReport \
+            -reporttypes:"MarkdownSummaryGithub;Cobertura"
+          cat CoverageReport/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+          rate=$(grep -oP 'line-rate="\K[0-9.]+' CoverageReport/Cobertura.xml | head -n1)
+          echo "line-rate=$(awk -v r="$rate" 'BEGIN { printf "%.1f", r * 100 }')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload test and coverage artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results
+          path: |
+            TestResults
+            CoverageReport
+          retention-days: 14

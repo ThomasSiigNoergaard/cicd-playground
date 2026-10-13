@@ -1,0 +1,84 @@
+# Dependabot version updates: opens PRs to bump dependencies on a schedule.
+# (Dependabot *security* updates are a separate repo setting; they open PRs
+# only for vulnerable versions and work even without this file.)
+#
+# Grouping keeps the PR count manageable: one PR per ecosystem per week
+# instead of one per package. CI, CodeQL and dependency review run on each PR.
+#
+# commit-message "build" + include: scope gives titles like
+# "build(deps): bump ..." that pass the PR title lint and do not trigger a
+# release (only feat/fix do).
+#
+# cooldown waits N days after a version is published before proposing it. Most
+# malicious package releases are detected and yanked within days, so this is a
+# cheap supply-chain defence (zizmor: dependabot-cooldown). Security updates
+# ignore the cooldown.
+# For GitHub Actions, Dependabot understands SHA pins and updates both the SHA
+# and the trailing "# vX.Y.Z" comment.
+version: 2
+
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
+    groups:
+      nuget:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
+    groups:
+      docker:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    # "/" covers .github/workflows; local composite actions need their own
+    # entries (globs are allowed in `directories`).
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: terraform
+    # Each root and module has its own provider constraints and lock file.
+    directories:
+      - /terraform/bootstrap
+      - /terraform/modules/app
+      - /terraform/environments/dev
+      - /terraform/environments/prod
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
+    groups:
+      terraform:
+        patterns: ["*"]

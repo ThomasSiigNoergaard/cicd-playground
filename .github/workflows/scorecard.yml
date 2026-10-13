@@ -1,0 +1,61 @@
+# -----------------------------------------------------------------------------
+# OpenSSF Scorecard: grades the repo against supply-chain security practices
+# (pinned dependencies, token permissions, branch protection, signed
+# releases, SAST, etc.). Results go to code scanning and, because
+# publish_results is true, to the public api.securityscorecards.dev, which
+# powers the README badge.
+#
+# Scorecard's own rules restrict this workflow: it must run on the default
+# branch, job-level permissions only, and no top-level `env`/`defaults`.
+# -----------------------------------------------------------------------------
+name: Scorecard
+
+on:
+  # Re-evaluates when branch protection rules change.
+  branch_protection_rule:
+  schedule:
+    - cron: "33 5 * * 2"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      # Upload SARIF to code scanning.
+      security-events: write
+      # OIDC token used to prove the results came from this workflow when
+      # publishing them (enables the badge).
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard-sarif
+          path: scorecard.sarif
+          retention-days: 5
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: scorecard.sarif
+          category: scorecard
